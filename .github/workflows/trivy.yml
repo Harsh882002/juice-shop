@@ -1,4 +1,4 @@
- name: Trivy Juice Shop Diagnostic
+name: Trivy Juice Shop Diagnostic
 
 on:
   workflow_dispatch:
