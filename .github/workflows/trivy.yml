@@ -1,4 +1,4 @@
-name: Trivy Security Assessment
+name: Trivy Juice Shop Security Scan
 
 on:
   workflow_dispatch:
@@ -7,12 +7,11 @@ permissions:
   contents: read
 
 jobs:
-  trivy:
-    name: Trivy SBOM and Vulnerability Scan
+  security:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Juice Shop
         uses: actions/checkout@v5
 
       - name: Setup Node.js
@@ -24,8 +23,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Show dependency tree
-        run: npm ls --all --depth=0
+      - name: Check dependency files
+        run: |
+          echo "=== package.json ==="
+          test -f package.json && echo "package.json FOUND"
+
+          echo "=== package-lock.json ==="
+          test -f package-lock.json && echo "package-lock.json FOUND"
+
+          echo "=== Node version ==="
+          node --version
+
+          echo "=== NPM version ==="
+          npm --version
 
       - name: Install Trivy 0.74.0
         run: |
@@ -34,11 +44,12 @@ jobs:
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Verify Trivy version
+      - name: Verify Trivy
         run: |
+          which trivy
           trivy --version
 
-      - name: Trivy filesystem vulnerability scan
+      - name: Run Trivy filesystem scan
         run: |
           trivy fs \
             --scanners vuln \
@@ -46,13 +57,16 @@ jobs:
             --format table \
             .
 
-      - name: Generate CycloneDX SBOM
+      - name: Generate SBOM
         run: |
           trivy fs \
             --scanners vuln \
             --format cyclonedx \
             --output sbom.json \
             .
+
+          echo "=== SBOM FILE ==="
+          ls -lh sbom.json
 
       - name: Generate JSON vulnerability report
         run: |
@@ -63,46 +77,44 @@ jobs:
             --output trivy-results.json \
             .
 
-      - name: Display vulnerability results
+          echo "=== JSON FILE ==="
+          ls -lh trivy-results.json
+
+      - name: Inspect generated files
         if: always()
         run: |
           echo "=========================================="
-          echo "        TRIVY VULNERABILITY RESULTS"
+          echo "GENERATED FILES"
           echo "=========================================="
 
-          cat trivy-results.json
+          ls -lah
 
-      - name: Display SBOM summary
-        run: |
           echo "=========================================="
-          echo "              SBOM SUMMARY"
+          echo "TRIVY JSON"
           echo "=========================================="
 
-          python - <<'PY'
-          import json
+          if [ -f trivy-results.json ]; then
+            cat trivy-results.json
+          else
+            echo "trivy-results.json DOES NOT EXIST"
+          fi
 
-          with open("sbom.json") as f:
-              data = json.load(f)
+          echo "=========================================="
+          echo "SBOM"
+          echo "=========================================="
 
-          components = data.get("components", [])
-          vulnerabilities = data.get("vulnerabilities", [])
+          if [ -f sbom.json ]; then
+            ls -lh sbom.json
+          else
+            echo "sbom.json DOES NOT EXIST"
+          fi
 
-          print(f"Components: {len(components)}")
-          print(f"Vulnerabilities: {len(vulnerabilities)}")
-
-          print("\nComponents:")
-          for component in components:
-              print(
-                  f"- {component.get('name')} "
-                  f"{component.get('version', '')}"
-              )
-          PY
-
-      - name: Upload SBOM and reports
+      - name: Upload results
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: trivy-security-assessment
+          name: trivy-juice-shop-results
           path: |
             sbom.json
             trivy-results.json
+          if-no-files-found: warn
