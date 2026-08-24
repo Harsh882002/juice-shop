@@ -1,0 +1,108 @@
+name: Trivy Security Assessment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trivy:
+    name: Trivy SBOM and Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Show dependency tree
+        run: npm ls --all --depth=0
+
+      - name: Install Trivy 0.74.0
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.74.0/contrib/install.sh \
+            | sh -s -- -b "$HOME/.local/bin" v0.74.0
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify Trivy version
+        run: |
+          trivy --version
+
+      - name: Trivy filesystem vulnerability scan
+        run: |
+          trivy fs \
+            --scanners vuln \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --format table \
+            .
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          trivy fs \
+            --scanners vuln \
+            --format cyclonedx \
+            --output sbom.json \
+            .
+
+      - name: Generate JSON vulnerability report
+        run: |
+          trivy fs \
+            --scanners vuln \
+            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+            --format json \
+            --output trivy-results.json \
+            .
+
+      - name: Display vulnerability results
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "        TRIVY VULNERABILITY RESULTS"
+          echo "=========================================="
+
+          cat trivy-results.json
+
+      - name: Display SBOM summary
+        run: |
+          echo "=========================================="
+          echo "              SBOM SUMMARY"
+          echo "=========================================="
+
+          python - <<'PY'
+          import json
+
+          with open("sbom.json") as f:
+              data = json.load(f)
+
+          components = data.get("components", [])
+          vulnerabilities = data.get("vulnerabilities", [])
+
+          print(f"Components: {len(components)}")
+          print(f"Vulnerabilities: {len(vulnerabilities)}")
+
+          print("\nComponents:")
+          for component in components:
+              print(
+                  f"- {component.get('name')} "
+                  f"{component.get('version', '')}"
+              )
+          PY
+
+      - name: Upload SBOM and reports
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: trivy-security-assessment
+          path: |
+            sbom.json
+            trivy-results.json
