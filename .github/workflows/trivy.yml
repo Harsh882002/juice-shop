@@ -1,4 +1,4 @@
-name: Trivy Juice Shop Security Scan
+ name: Trivy Juice Shop Diagnostic
 
 on:
   workflow_dispatch:
@@ -7,68 +7,22 @@ permissions:
   contents: read
 
 jobs:
-  security:
-    name: SBOM and Vulnerability Scan
+  scan:
     runs-on: ubuntu-latest
 
     steps:
-
-      # 1. Checkout repository
-      - name: Checkout Juice Shop
+      - name: Checkout
         uses: actions/checkout@v5
 
-      # 2. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: "22"
 
-      # 3. Check repository files
-      - name: Inspect repository
-        run: |
-          echo "=========================================="
-          echo "Repository information"
-          echo "=========================================="
-
-          echo "Node:"
-          node --version
-
-          echo "NPM:"
-          npm --version
-
-          echo ""
-          echo "package.json:"
-          if [ -f package.json ]; then
-            echo "FOUND"
-          else
-            echo "NOT FOUND"
-            exit 1
-          fi
-
-          echo ""
-          echo "Lock files:"
-          find . -maxdepth 2 \
-            \( -name "package-lock.json" \
-            -o -name "npm-shrinkwrap.json" \
-            -o -name "yarn.lock" \
-            -o -name "pnpm-lock.yaml" \) \
-            -print || true
-
-      # 4. Install dependencies
       - name: Install dependencies
         run: npm install
 
-      # 5. Show installed dependency information
-      - name: Show dependency information
-        run: |
-          echo "=========================================="
-          echo "Top-level dependencies"
-          echo "=========================================="
-
-          npm list --depth=0 || true
-
-      # 6. Install latest Trivy
-      - name: Install Trivy 0.74.0
+      - name: Install Trivy
         run: |
           curl -sfL \
             https://raw.githubusercontent.com/aquasecurity/trivy/v0.74.0/contrib/install.sh \
@@ -76,150 +30,82 @@ jobs:
 
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      # 7. Verify Trivy
-      - name: Verify Trivy
+      - name: Verify environment
         run: |
-          echo "=========================================="
-          echo "Trivy version"
-          echo "=========================================="
+          echo "PWD:"
+          pwd
 
-          which trivy
+          echo ""
+          echo "Trivy:"
           trivy --version
 
-      # 8. Trivy filesystem vulnerability scan
-      - name: Trivy filesystem vulnerability scan
-        run: |
-          echo "=========================================="
-          echo "Trivy vulnerability scan"
-          echo "=========================================="
+          echo ""
+          echo "Repository:"
+          ls -lah
 
+      - name: Run Trivy
+        run: |
           trivy fs \
             --scanners vuln \
-            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
-            --format table \
+            --format json \
+            --output ./trivy-results.json \
             .
 
-      # 9. Generate CycloneDX SBOM
-      - name: Generate CycloneDX SBOM
+      - name: Generate SBOM
         run: |
-          echo "=========================================="
-          echo "Generating SBOM"
-          echo "=========================================="
-
           trivy fs \
             --scanners vuln \
             --format cyclonedx \
-            --output sbom.json \
+            --output ./sbom.json \
             .
 
-          echo ""
-          echo "SBOM generated:"
-          ls -lh sbom.json
-
-      # 10. Generate JSON vulnerability report
-      - name: Generate JSON vulnerability report
+      - name: Verify generated files
         run: |
-          echo "=========================================="
-          echo "Generating JSON vulnerability report"
-          echo "=========================================="
+          echo "================================"
+          echo "GENERATED FILES"
+          echo "================================"
 
-          trivy fs \
-            --scanners vuln \
-            --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
-            --format json \
-            --output trivy-results.json \
-            .
+          pwd
 
           echo ""
-          echo "JSON report generated:"
-          ls -lh trivy-results.json
-
-      # 11. Display vulnerability summary
-      - name: Display vulnerability summary
-        if: always()
-        run: |
-          echo "=========================================="
-          echo "TRIVY VULNERABILITY RESULTS"
-          echo "=========================================="
-
-          if [ -f trivy-results.json ]; then
-            python - <<'PY'
-          import json
-
-          with open("trivy-results.json") as f:
-              data = json.load(f)
-
-          total = 0
-
-          for result in data.get("Results", []):
-              vulnerabilities = result.get("Vulnerabilities", [])
-
-              if vulnerabilities:
-                  print(f"\nTarget: {result.get('Target', 'unknown')}")
-                  print(f"Type: {result.get('Type', 'unknown')}")
-
-                  for vuln in vulnerabilities:
-                      total += 1
-
-                      print(
-                          f"- {vuln.get('VulnerabilityID', 'N/A')} | "
-                          f"{vuln.get('PkgName', 'N/A')} | "
-                          f"{vuln.get('InstalledVersion', 'N/A')} | "
-                          f"{vuln.get('Severity', 'N/A')} | "
-                          f"Fixed: {vuln.get('FixedVersion', 'N/A')}"
-                      )
-
-          print(f"\nTotal vulnerabilities: {total}")
-          PY
+          echo "trivy-results.json:"
+          if [ -f ./trivy-results.json ]; then
+            ls -lh ./trivy-results.json
+            echo "FOUND"
           else
-            echo "trivy-results.json does not exist"
+            echo "MISSING"
           fi
 
-      # 12. Display SBOM summary
-      - name: Display SBOM summary
-        if: always()
-        run: |
-          echo "=========================================="
-          echo "SBOM SUMMARY"
-          echo "=========================================="
-
-          if [ -f sbom.json ]; then
-            python - <<'PY'
-          import json
-
-          with open("sbom.json") as f:
-              data = json.load(f)
-
-          components = data.get("components", [])
-          vulnerabilities = data.get("vulnerabilities", [])
-
-          print(f"Components: {len(components)}")
-          print(f"Vulnerabilities: {len(vulnerabilities)}")
-
-          print("\nComponents found:")
-
-          for component in components:
-              name = component.get("name", "N/A")
-              version = component.get("version", "N/A")
-              component_type = component.get("type", "N/A")
-
-              print(
-                  f"- {name} | "
-                  f"{version} | "
-                  f"{component_type}"
-              )
-          PY
+          echo ""
+          echo "sbom.json:"
+          if [ -f ./sbom.json ]; then
+            ls -lh ./sbom.json
+            echo "FOUND"
           else
-            echo "sbom.json does not exist"
+            echo "MISSING"
           fi
 
-      # 13. Upload results
-      - name: Upload Trivy assessment
+          echo ""
+          echo "All JSON files:"
+          find . -maxdepth 3 -type f \
+            \( -name "*.json" -o -name "*.xml" \) \
+            -print
+
+      - name: Show Trivy result
+        if: always()
+        run: |
+          if [ -f ./trivy-results.json ]; then
+            cat ./trivy-results.json
+          else
+            echo "No Trivy JSON file found"
+          fi
+
+      - name: Upload results
         if: always()
         uses: actions/upload-artifact@v5
         with:
-          name: trivy-juice-shop-assessment
+          name: trivy-results
           path: |
-            sbom.json
-            trivy-results.json
+            ./trivy-results.json
+            ./sbom.json
           if-no-files-found: warn
